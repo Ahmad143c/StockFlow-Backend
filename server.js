@@ -16,7 +16,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 const rawAllowedOrigins = process.env.ALLOWED_ORIGINS || '';
-const defaultOrigins = process.env.NODE_ENV === 'production' ? ['https://stockflow-orcin-nine.vercel.app'] : ['http://localhost:3000'];
+const defaultOrigins = process.env.NODE_ENV === 'production' ? ['https://stockflow-sand.vercel.app'] : ['http://localhost:3000'];
 const allowedOrigins = rawAllowedOrigins.trim()
   ? rawAllowedOrigins.split(',').map(origin => origin.trim()).filter(Boolean)
   : defaultOrigins;

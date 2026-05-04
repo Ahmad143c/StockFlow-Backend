@@ -63,9 +63,9 @@ router.get('/test-delete/:sellerId', admin, async (req, res) => {
 });
 
 // Delete all sales for a seller (admin only)
-router.delete('/seller/:sellerId', admin, saleController.deleteSalesBySeller);
+router.delete('/seller/:sellerId', auth, saleController.deleteSalesBySeller);
 
 // Delete all refunds for a seller (admin only)
-router.delete('/refunds/seller/:sellerId', admin, saleController.deleteRefundsBySeller);
+router.delete('/refunds/seller/:sellerId', auth, saleController.deleteRefundsBySeller);
 
 module.exports = router;

@@ -20,6 +20,11 @@ router.post('/:id/warranty-claim', auth, saleController.claimWarranty);
 // Get recent refunds (for notifications)
 router.get('/refunds/recent', auth, saleController.getRecentRefunds);
 
+// Test route to verify deployment
+router.get('/test', (req, res) => {
+  res.json({ message: 'Route deployed successfully', timestamp: new Date().toISOString() });
+});
+
 // Get all refunds for a specific seller
 router.get('/refunds', auth, (req, res, next) => {
   console.log('DEBUG: /refunds route hit');

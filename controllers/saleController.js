@@ -1058,3 +1058,59 @@ exports.getRecentWarrantyClaims = async (req, res) => {
     return res.status(500).json({ success: false, message: e.message });
   }
 };
+
+// Delete all sales for a specific seller (admin only)
+exports.deleteSalesBySeller = async (req, res) => {
+  try {
+    const { sellerId } = req.params;
+    
+    // Delete all sales records for this seller
+    const result = await Sale.deleteMany({ sellerId });
+    
+    res.json({ 
+      success: true,
+      message: `Deleted ${result.deletedCount} sales records for seller`,
+      deletedCount: result.deletedCount 
+    });
+  } catch (error) {
+    console.error('Error deleting sales by seller:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || 'Failed to delete sales records' 
+    });
+  }
+};
+
+// Delete all refunds for a specific seller (admin only)
+exports.deleteRefundsBySeller = async (req, res) => {
+  try {
+    const { sellerId } = req.params;
+    
+    // Find all sales for this seller to access their refunds
+    const sales = await Sale.find({ sellerId });
+    
+    let totalRefundsDeleted = 0;
+    
+    // Remove all refunds from each sale
+    for (const sale of sales) {
+      if (sale.refunds && sale.refunds.length > 0) {
+        const refundCount = sale.refunds.length;
+        sale.refunds = [];
+        await sale.save();
+        totalRefundsDeleted += refundCount;
+      }
+    }
+    
+    res.json({ 
+      success: true,
+      message: `Deleted ${totalRefundsDeleted} refund records for seller`,
+      deletedCount: totalRefundsDeleted 
+    });
+  } catch (error) {
+    console.error('Error deleting refunds by seller:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || 'Failed to delete refund records' 
+    });
+  }
+};

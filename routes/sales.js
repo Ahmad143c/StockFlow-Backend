@@ -28,4 +28,10 @@ router.get('/:id', auth, saleController.getSaleById);
 // Update sale (limited fields)
 router.put('/:id', auth, saleController.updateSale);
 
+// Delete all sales for a seller (admin only)
+router.delete('/seller/:sellerId', admin, saleController.deleteSalesBySeller);
+
+// Delete all refunds for a seller (admin only)
+router.delete('/refunds/seller/:sellerId', admin, saleController.deleteRefundsBySeller);
+
 module.exports = router;

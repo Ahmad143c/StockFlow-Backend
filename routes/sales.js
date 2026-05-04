@@ -26,7 +26,7 @@ router.get('/refunds', auth, saleController.getRefundsBySeller);
 // Get recent warranty claims (for notifications)
 router.get('/warranty/recent', auth, saleController.getRecentWarrantyClaims);
 
-// Get sale by ID
+// Get sale by ID (must be after specific routes)
 router.get('/:id', auth, saleController.getSaleById);
 // Update sale (limited fields)
 router.put('/:id', auth, saleController.updateSale);

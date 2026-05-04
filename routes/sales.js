@@ -21,7 +21,10 @@ router.post('/:id/warranty-claim', auth, saleController.claimWarranty);
 router.get('/refunds/recent', auth, saleController.getRecentRefunds);
 
 // Get all refunds for a specific seller
-router.get('/refunds', auth, saleController.getRefundsBySeller);
+router.get('/refunds', auth, (req, res, next) => {
+  console.log('DEBUG: /refunds route hit');
+  next();
+}, saleController.getRefundsBySeller);
 
 // Get recent warranty claims (for notifications)
 router.get('/warranty/recent', auth, saleController.getRecentWarrantyClaims);

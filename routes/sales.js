@@ -20,6 +20,9 @@ router.post('/:id/warranty-claim', auth, saleController.claimWarranty);
 // Get recent refunds (for notifications)
 router.get('/refunds/recent', auth, saleController.getRecentRefunds);
 
+// Get all refunds for a specific seller
+router.get('/refunds', auth, saleController.getRefundsBySeller);
+
 // Get recent warranty claims (for notifications)
 router.get('/warranty/recent', auth, saleController.getRecentWarrantyClaims);
 

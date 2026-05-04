@@ -1114,3 +1114,54 @@ exports.deleteRefundsBySeller = async (req, res) => {
     });
   }
 };
+
+// Get all refunds for a specific seller
+exports.getRefundsBySeller = async (req, res) => {
+  try {
+    const { sellerId } = req.query;
+    
+    if (!sellerId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Seller ID is required' 
+      });
+    }
+    
+    // Find all sales for this seller
+    const sales = await Sale.find({ sellerId }).sort({ createdAt: -1 });
+    
+    const allRefunds = [];
+    
+    // Extract all refunds from sales
+    for (const sale of sales) {
+      if (sale.refunds && sale.refunds.length > 0) {
+        // Add sale info to each refund
+        sale.refunds.forEach(refund => {
+          allRefunds.push({
+            ...refund.toObject(),
+            saleId: sale._id,
+            saleDate: sale.createdAt,
+            customerName: sale.customerName,
+            customerEmail: sale.customerEmail,
+            totalAmount: sale.totalAmount
+          });
+        });
+      }
+    }
+    
+    // Sort refunds by date
+    allRefunds.sort((a, b) => new Date(b.refundDate) - new Date(a.refundDate));
+    
+    res.json({ 
+      success: true,
+      refunds: allRefunds,
+      count: allRefunds.length 
+    });
+  } catch (error) {
+    console.error('Error fetching refunds by seller:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || 'Failed to fetch refund records' 
+    });
+  }
+};

@@ -340,7 +340,7 @@ function generateRefundInvoiceHTML(sale, refundRecord) {
 // Create a new sale (POST /sales)
 exports.createSale = async (req, res) => {
   try {
-    const { items, sellerId, sellerName, cashierName, customerName, customerContact, customerEmail, paidAmount, paymentMethod, paymentStatus: paymentStatusInput, paymentProofUrl, cashAmount, changeAmount, dueDate, discountAmount } = req.body;
+    const { items, sellerId, sellerName, cashierName, customerName, customerContact, customerEmail, paidAmount, paymentMethod, paymentStatus: paymentStatusInput, paymentProofUrl, cashAmount, changeAmount, dueDate, discountAmount, emailFallbackToAdmin, adminEmail } = req.body;
     if (!items?.length || !sellerId) return res.status(400).json({ message: 'Missing sale items or seller' });
 
     let totalQuantity = 0;
@@ -456,7 +456,47 @@ exports.createSale = async (req, res) => {
     await sale.save();
 
     // Send invoice email (await so status is saved) - enhanced HTML body
-    if (sale.customerEmail) {
+    if (emailFallbackToAdmin && adminEmail) {
+      // No customer email - send only to admin
+      const invoiceNum = sale.invoiceNumber || String(sale._id).slice(-6);
+      const subject = `Invoice #${invoiceNum} - Admin Copy (No Customer Email)`;
+      
+      // Fetch products for warranty info
+      let products = [];
+      try {
+        const productIds = sale.items.map(i => i.productId).filter(id => id);
+        if (productIds.length > 0) {
+          products = await Product.find({ _id: { $in: productIds } }).lean();
+        }
+      } catch (err) {
+        console.error('Error fetching products for warranty:', err);
+      }
+      
+      // Generate invoice HTML
+      let html;
+      try {
+        html = generateInvoiceHTML(sale, products);
+      } catch (err) {
+        console.error('Error generating invoice HTML:', err);
+        html = `<html><body><h1>Invoice</h1><p>Error generating invoice. Please contact support.</p></body></html>`;
+      }
+
+      // Send only to admin (no customer copy)
+      (async () => {
+        try {
+          const mailRes = await sendInvoiceEmail(adminEmail, subject, html);
+          if (mailRes.success) {
+            const messageId = mailRes.result?.messageId || '';
+            await Sale.findByIdAndUpdate(sale._id, { emailStatus: 'sent_to_admin', emailError: '', emailMessageId: messageId }).catch(()=>{});
+          } else {
+            const errStr = typeof mailRes.error === 'string' ? mailRes.error : JSON.stringify(mailRes.error);
+            await Sale.findByIdAndUpdate(sale._id, { emailStatus: 'failed', emailError: errStr }).catch(()=>{});
+          }
+        } catch (e) {
+          console.error('Background email send failed:', e.message);
+        }
+      })();
+    } else if (sale.customerEmail) {
       const subject = `Invoice #${sale.invoiceNumber || String(sale._id).slice(-8)} - New Adil Electric Concern`;
       
       // Fetch products for warranty info
@@ -481,8 +521,7 @@ exports.createSale = async (req, res) => {
         html = `<html><body><h1>Invoice</h1><p>Error generating invoice. Please contact support.</p></body></html>`;
       }
 
-      // Send to customer
-      // Send email in background (non-blocking) so API response returns immediately
+      // Send to customer + admin copy
       (async () => {
         try {
           const mailRes = await sendInvoiceEmail(sale.customerEmail, subject, html);
@@ -495,17 +534,17 @@ exports.createSale = async (req, res) => {
           }
           
           // Send to admin email
-          const adminEmail = 'adilelectric17@gmail.com';
+          const adminEmailAddr = adminEmail || 'adilelectric17@gmail.com';
           const paidVal = sale.paymentMethod === 'Cash' ? (sale.cashAmount || 0) : (sale.paidAmount || 0);
           const invoiceNum = sale.invoiceNumber || String(sale._id).slice(-6);
           const adminSubject = `[ADMIN] Invoice #${invoiceNum} - ${sale.customerName || 'Unknown Customer'} - Net Rs. ${sale.netAmount} - Paid Rs. ${paidVal} - Change Rs. ${sale.changeAmount || 0}`;
-          await sendInvoiceEmail(adminEmail, adminSubject, html).catch(()=>{});
+          await sendInvoiceEmail(adminEmailAddr, adminSubject, html).catch(()=>{});
         } catch (e) {
           console.error('Background email send failed:', e.message);
         }
       })();
     } else {
-      // no email provided - set status immediately without awaiting
+      // no email provided and no fallback - set status immediately without awaiting
       Sale.findByIdAndUpdate(sale._id, { emailStatus: 'failed', emailError: 'No customer email provided' }).catch(()=>{});
     }
 

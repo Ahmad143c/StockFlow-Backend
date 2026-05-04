@@ -20,7 +20,7 @@ async function auth(req, res, next) {
       return res.status(401).json({ message: 'Password changed. Please login again.' });
     }
 
-    req.user = decoded;
+    req.user = user;
     next();
   } catch (err) {
     res.status(401).json({ message: 'Token is not valid' });

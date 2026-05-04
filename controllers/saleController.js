@@ -1154,13 +1154,16 @@ exports.getRefundsBySeller = async (req, res) => {
       });
     }
     
+    console.log('DEBUG: getRefundsBySeller for sellerId:', sellerId);
     // Find all sales for this seller
     const sales = await Sale.find({ sellerId }).sort({ createdAt: -1 });
+    console.log('DEBUG: Found', sales.length, 'sales for seller');
     
     const allRefunds = [];
     
     // Extract all refunds from sales
     for (const sale of sales) {
+      console.log('DEBUG: Sale', sale._id, 'has refunds:', sale.refunds ? sale.refunds.length : 0);
       if (sale.refunds && sale.refunds.length > 0) {
         // Add sale info to each refund
         sale.refunds.forEach(refund => {
@@ -1175,6 +1178,8 @@ exports.getRefundsBySeller = async (req, res) => {
         });
       }
     }
+    
+    console.log('DEBUG: Total refunds found:', allRefunds.length);
     
     // Sort refunds by date
     allRefunds.sort((a, b) => new Date(b.refundDate) - new Date(a.refundDate));

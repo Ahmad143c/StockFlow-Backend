@@ -664,16 +664,11 @@ exports.updateSale = async (req, res) => {
 exports.resendEmail = async (req, res) => {
   try {
     const saleId = req.params.id;
+    const { fallbackToAdmin, adminEmail, reason } = req.body;
     const sale = await Sale.findById(saleId);
     if (!sale) return res.status(404).json({ message: 'Sale not found' });
 
-    if (!sale.customerEmail) {
-      await Sale.findByIdAndUpdate(saleId, { emailStatus: 'failed', emailError: 'No customer email provided' }).catch(()=>{});
-      return res.status(400).json({ success: false, message: 'No customer email provided' });
-    }
-
     // Build professional invoice HTML (same as createSale)
-    const subject = `Invoice #${sale.invoiceNumber || String(sale._id).slice(-8)} - New Adil Electric Concern`;
     const invoiceNum = sale.invoiceNumber || String(sale._id).substr(-6);
     
     // Fetch products for warranty info
@@ -697,25 +692,60 @@ exports.resendEmail = async (req, res) => {
       return res.status(500).json({ success: false, error: 'Failed to generate invoice HTML' });
     }
 
-    // attempt send to customer
-    const mailRes = await sendInvoiceEmail(sale.customerEmail, subject, html);
-    if (mailRes.success) {
-      const messageId = mailRes.result?.messageId || '';
-      await Sale.findByIdAndUpdate(saleId, { emailStatus: 'sent', emailError: '', emailMessageId: messageId }).catch(()=>{});
+    let targetEmail, subject, emailStatus, emailError;
+    
+    if (fallbackToAdmin || !sale.customerEmail) {
+      // Send to admin email instead
+      targetEmail = adminEmail || 'adilelectric17@gmail.com';
+      subject = `Invoice #${invoiceNum} - Admin Copy (No Customer Email)`;
+      if (reason) {
+        subject += ` - ${reason}`;
+      }
+      emailStatus = 'sent_to_admin';
+      emailError = '';
       
-      // Also send to admin
-      const adminEmail = 'adilelectric17@gmail.com';
-      const paidVal = sale.paymentMethod === 'Cash' ? (sale.cashAmount || 0) : (sale.paidAmount || 0);
-      const adminSubject = `[ADMIN] Invoice #${invoiceNum} - ${sale.customerName || 'Unknown Customer'} - Net Rs. ${sale.netAmount} - Paid Rs. ${paidVal} - Change Rs. ${sale.changeAmount || 0}`;
-      await sendInvoiceEmail(adminEmail, adminSubject, html).catch(()=>{});
-      
-      const updated = await Sale.findById(saleId).lean();
-      return res.json({ success: true, sale: updated });
+      const mailRes = await sendInvoiceEmail(targetEmail, subject, html);
+      if (mailRes.success) {
+        const messageId = mailRes.result?.messageId || '';
+        await Sale.findByIdAndUpdate(saleId, { emailStatus, emailError, emailMessageId: messageId }).catch(()=>{});
+        const updated = await Sale.findById(saleId).lean();
+        return res.json({ success: true, sale: updated, sentTo: 'admin', reason: reason || 'No customer email' });
+      } else {
+        const errStr = typeof mailRes.error === 'string' ? mailRes.error : JSON.stringify(mailRes.error);
+        emailStatus = 'failed';
+        emailError = errStr;
+        await Sale.findByIdAndUpdate(saleId, { emailStatus, emailError }).catch(()=>{});
+        const updated = await Sale.findById(saleId).lean();
+        return res.status(500).json({ success: false, error: errStr, sale: updated });
+      }
     } else {
-      const errStr = typeof mailRes.error === 'string' ? mailRes.error : JSON.stringify(mailRes.error);
-      await Sale.findByIdAndUpdate(saleId, { emailStatus: 'failed', emailError: errStr }).catch(()=>{});
-      const updated = await Sale.findById(saleId).lean();
-      return res.status(500).json({ success: false, error: errStr, sale: updated });
+      // Normal customer email
+      targetEmail = sale.customerEmail;
+      subject = `Invoice #${sale.invoiceNumber || String(sale._id).slice(-8)} - New Adil Electric Concern`;
+      emailStatus = 'sent';
+      emailError = '';
+      
+      const mailRes = await sendInvoiceEmail(targetEmail, subject, html);
+      if (mailRes.success) {
+        const messageId = mailRes.result?.messageId || '';
+        await Sale.findByIdAndUpdate(saleId, { emailStatus, emailError, emailMessageId: messageId }).catch(()=>{});
+        
+        // Also send to admin
+        const adminEmailAddr = adminEmail || 'adilelectric17@gmail.com';
+        const paidVal = sale.paymentMethod === 'Cash' ? (sale.cashAmount || 0) : (sale.paidAmount || 0);
+        const adminSubject = `[ADMIN] Invoice #${invoiceNum} - ${sale.customerName || 'Unknown Customer'} - Net Rs. ${sale.netAmount} - Paid Rs. ${paidVal} - Change Rs. ${sale.changeAmount || 0}`;
+        await sendInvoiceEmail(adminEmailAddr, adminSubject, html).catch(()=>{});
+        
+        const updated = await Sale.findById(saleId).lean();
+        return res.json({ success: true, sale: updated, sentTo: 'customer' });
+      } else {
+        const errStr = typeof mailRes.error === 'string' ? mailRes.error : JSON.stringify(mailRes.error);
+        emailStatus = 'failed';
+        emailError = errStr;
+        await Sale.findByIdAndUpdate(saleId, { emailStatus, emailError }).catch(()=>{});
+        const updated = await Sale.findById(saleId).lean();
+        return res.status(500).json({ success: false, error: errStr, sale: updated });
+      }
     }
   } catch (e) {
     return res.status(500).json({ success: false, error: e.message });
@@ -1062,21 +1092,17 @@ exports.getRecentWarrantyClaims = async (req, res) => {
 // Delete all sales for a specific seller (admin only)
 exports.deleteSalesBySeller = async (req, res) => {
   try {
-    console.log('DEBUG: deleteSalesBySeller called with sellerId:', req.params.sellerId);
     const { sellerId } = req.params;
     
     if (!sellerId) {
-      console.log('DEBUG: No sellerId provided');
       return res.status(400).json({ 
         success: false, 
         message: 'Seller ID is required' 
       });
     }
     
-    console.log('DEBUG: Attempting to delete sales for seller:', sellerId);
     // Delete all sales records for this seller
     const result = await Sale.deleteMany({ sellerId });
-    console.log('DEBUG: Delete result:', result);
     
     res.json({ 
       success: true,
@@ -1085,7 +1111,6 @@ exports.deleteSalesBySeller = async (req, res) => {
     });
   } catch (error) {
     console.error('Error deleting sales by seller:', error);
-    console.error('Error stack:', error.stack);
     res.status(500).json({ 
       success: false, 
       message: error.message || 'Failed to delete sales records' 
@@ -1096,37 +1121,30 @@ exports.deleteSalesBySeller = async (req, res) => {
 // Delete all refunds for a specific seller (admin only)
 exports.deleteRefundsBySeller = async (req, res) => {
   try {
-    console.log('DEBUG: deleteRefundsBySeller called with sellerId:', req.params.sellerId);
     const { sellerId } = req.params;
     
     if (!sellerId) {
-      console.log('DEBUG: No sellerId provided');
       return res.status(400).json({ 
         success: false, 
         message: 'Seller ID is required' 
       });
     }
     
-    console.log('DEBUG: Finding sales for seller:', sellerId);
     // Find all sales for this seller to access their refunds
     const sales = await Sale.find({ sellerId });
-    console.log('DEBUG: Found', sales.length, 'sales for seller');
     
     let totalRefundsDeleted = 0;
     
     // Remove all refunds from each sale
     for (const sale of sales) {
       if (sale.refunds && sale.refunds.length > 0) {
-        console.log('DEBUG: Sale', sale._id, 'has', sale.refunds.length, 'refunds');
         const refundCount = sale.refunds.length;
         sale.refunds = [];
         await sale.save();
         totalRefundsDeleted += refundCount;
-        console.log('DEBUG: Cleared refunds for sale', sale._id);
       }
     }
     
-    console.log('DEBUG: Total refunds deleted:', totalRefundsDeleted);
     res.json({ 
       success: true,
       message: `Deleted ${totalRefundsDeleted} refund records for seller`,
@@ -1134,7 +1152,6 @@ exports.deleteRefundsBySeller = async (req, res) => {
     });
   } catch (error) {
     console.error('Error deleting refunds by seller:', error);
-    console.error('Error stack:', error.stack);
     res.status(500).json({ 
       success: false, 
       message: error.message || 'Failed to delete refund records' 
@@ -1154,16 +1171,13 @@ exports.getRefundsBySeller = async (req, res) => {
       });
     }
     
-    console.log('DEBUG: getRefundsBySeller for sellerId:', sellerId);
     // Find all sales for this seller
     const sales = await Sale.find({ sellerId }).sort({ createdAt: -1 });
-    console.log('DEBUG: Found', sales.length, 'sales for seller');
     
     const allRefunds = [];
     
     // Extract all refunds from sales
     for (const sale of sales) {
-      console.log('DEBUG: Sale', sale._id, 'has refunds:', sale.refunds ? sale.refunds.length : 0);
       if (sale.refunds && sale.refunds.length > 0) {
         // Add sale info to each refund
         sale.refunds.forEach(refund => {
@@ -1178,8 +1192,6 @@ exports.getRefundsBySeller = async (req, res) => {
         });
       }
     }
-    
-    console.log('DEBUG: Total refunds found:', allRefunds.length);
     
     // Sort refunds by date
     allRefunds.sort((a, b) => new Date(b.refundDate) - new Date(a.refundDate));

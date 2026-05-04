@@ -28,9 +28,7 @@ async function auth(req, res, next) {
 }
 
 function admin(req, res, next) {
-  console.log('DEBUG: Admin middleware checking user role');
   if (req.user.role !== 'admin') return res.status(403).json({ message: 'Admin access required' });
-  console.log('DEBUG: Admin access granted');
   next();
 }
 

@@ -31,36 +31,6 @@ router.get('/:id', auth, saleController.getSaleById);
 // Update sale (limited fields)
 router.put('/:id', auth, saleController.updateSale);
 
-// Test endpoint to verify database operations
-router.get('/test-delete/:sellerId', admin, async (req, res) => {
-  try {
-    const { sellerId } = req.params;
-    console.log('TEST: Received sellerId:', sellerId);
-    
-    // Test 1: Find sales first
-    const sales = await Sale.find({ sellerId });
-    console.log('TEST: Found', sales.length, 'sales');
-    
-    // Test 2: Try to delete one sale
-    if (sales.length > 0) {
-      const deleteResult = await Sale.deleteOne({ _id: sales[0]._id });
-      console.log('TEST: Delete result:', deleteResult);
-    }
-    
-    res.json({ 
-      success: true,
-      message: 'Test completed',
-      salesFound: sales.length,
-      sellerId: sellerId
-    });
-  } catch (error) {
-    console.error('TEST ERROR:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
-    });
-  }
-});
 
 // Delete all sales for a seller (admin only)
 router.delete('/seller/:sellerId', auth, saleController.deleteSalesBySeller);

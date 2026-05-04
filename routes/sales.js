@@ -20,16 +20,8 @@ router.post('/:id/warranty-claim', auth, saleController.claimWarranty);
 // Get recent refunds (for notifications)
 router.get('/refunds/recent', auth, saleController.getRecentRefunds);
 
-// Test route to verify deployment
-router.get('/test', (req, res) => {
-  res.json({ message: 'Route deployed successfully', timestamp: new Date().toISOString() });
-});
-
 // Get all refunds for a specific seller
-router.get('/refunds', auth, (req, res, next) => {
-  console.log('DEBUG: /refunds route hit');
-  next();
-}, saleController.getRefundsBySeller);
+router.get('/refunds', auth, saleController.getRefundsBySeller);
 
 // Get recent warranty claims (for notifications)
 router.get('/warranty/recent', auth, saleController.getRecentWarrantyClaims);

@@ -1062,10 +1062,21 @@ exports.getRecentWarrantyClaims = async (req, res) => {
 // Delete all sales for a specific seller (admin only)
 exports.deleteSalesBySeller = async (req, res) => {
   try {
+    console.log('DEBUG: deleteSalesBySeller called with sellerId:', req.params.sellerId);
     const { sellerId } = req.params;
     
+    if (!sellerId) {
+      console.log('DEBUG: No sellerId provided');
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Seller ID is required' 
+      });
+    }
+    
+    console.log('DEBUG: Attempting to delete sales for seller:', sellerId);
     // Delete all sales records for this seller
     const result = await Sale.deleteMany({ sellerId });
+    console.log('DEBUG: Delete result:', result);
     
     res.json({ 
       success: true,
@@ -1074,6 +1085,7 @@ exports.deleteSalesBySeller = async (req, res) => {
     });
   } catch (error) {
     console.error('Error deleting sales by seller:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({ 
       success: false, 
       message: error.message || 'Failed to delete sales records' 
@@ -1084,23 +1096,37 @@ exports.deleteSalesBySeller = async (req, res) => {
 // Delete all refunds for a specific seller (admin only)
 exports.deleteRefundsBySeller = async (req, res) => {
   try {
+    console.log('DEBUG: deleteRefundsBySeller called with sellerId:', req.params.sellerId);
     const { sellerId } = req.params;
     
+    if (!sellerId) {
+      console.log('DEBUG: No sellerId provided');
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Seller ID is required' 
+      });
+    }
+    
+    console.log('DEBUG: Finding sales for seller:', sellerId);
     // Find all sales for this seller to access their refunds
     const sales = await Sale.find({ sellerId });
+    console.log('DEBUG: Found', sales.length, 'sales for seller');
     
     let totalRefundsDeleted = 0;
     
     // Remove all refunds from each sale
     for (const sale of sales) {
       if (sale.refunds && sale.refunds.length > 0) {
+        console.log('DEBUG: Sale', sale._id, 'has', sale.refunds.length, 'refunds');
         const refundCount = sale.refunds.length;
         sale.refunds = [];
         await sale.save();
         totalRefundsDeleted += refundCount;
+        console.log('DEBUG: Cleared refunds for sale', sale._id);
       }
     }
     
+    console.log('DEBUG: Total refunds deleted:', totalRefundsDeleted);
     res.json({ 
       success: true,
       message: `Deleted ${totalRefundsDeleted} refund records for seller`,
@@ -1108,6 +1134,7 @@ exports.deleteRefundsBySeller = async (req, res) => {
     });
   } catch (error) {
     console.error('Error deleting refunds by seller:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({ 
       success: false, 
       message: error.message || 'Failed to delete refund records' 

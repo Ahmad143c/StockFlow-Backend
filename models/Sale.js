@@ -40,7 +40,11 @@ const saleSchema = new mongoose.Schema({
   emailError: { type: String, default: '' },
   emailMessageId: { type: String, default: '' }
   ,
-  edited: { type: Boolean, default: false }
+  edited: { type: Boolean, default: false },
+  paymentParts: [{
+    amount: { type: Number, default: 0 },
+    date: { type: Date, default: Date.now }
+  }]
   ,
   refunds: [{
     items: [{

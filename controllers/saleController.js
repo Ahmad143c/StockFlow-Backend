@@ -340,7 +340,7 @@ function generateRefundInvoiceHTML(sale, refundRecord) {
 // Create a new sale (POST /sales)
 exports.createSale = async (req, res) => {
   try {
-    const { items, sellerId, sellerName, cashierName, customerName, customerContact, customerEmail, paidAmount, paymentMethod, paymentStatus: paymentStatusInput, paymentProofUrl, cashAmount, changeAmount, dueDate, discountAmount, emailFallbackToAdmin, adminEmail } = req.body;
+    const { items, sellerId, sellerName, cashierName, customerName, customerContact, customerEmail, paidAmount, paymentMethod, paymentStatus: paymentStatusInput, paymentProofUrl, cashAmount, changeAmount, dueDate, discountAmount, emailFallbackToAdmin, adminEmail, paymentParts } = req.body;
     if (!items?.length || !sellerId) return res.status(400).json({ message: 'Missing sale items or seller' });
 
     let totalQuantity = 0;
@@ -451,7 +451,8 @@ exports.createSale = async (req, res) => {
       customerName,
       customerContact,
       customerEmail,
-      emailStatus: 'pending'
+      emailStatus: 'pending',
+      paymentParts: Array.isArray(paymentParts) ? paymentParts.map(p => ({ amount: Number(p.amount) || 0, date: p.date ? new Date(p.date) : new Date() })) : []
     });
     await sale.save();
 
@@ -591,7 +592,8 @@ exports.updateSale = async (req, res) => {
     const {
       cashierName, customerName, customerContact, customerEmail,
       paymentStatus, paymentMethod, paidAmount, cashAmount, changeAmount, dueDate,
-      items, netAmount, totalAmount, discountTotal, discountAmount, totalQuantity, paymentProofUrl, edited
+      items, netAmount, totalAmount, discountTotal, discountAmount, totalQuantity, paymentProofUrl, edited,
+      paymentParts
     } = req.body;
     const sale = await Sale.findById(req.params.id);
     if (!sale) return res.status(404).json({ message: 'Sale not found' });
@@ -607,6 +609,9 @@ exports.updateSale = async (req, res) => {
     if (changeAmount !== undefined) sale.changeAmount = Number(changeAmount) || 0;
     if (dueDate !== undefined) sale.dueDate = dueDate ? new Date(dueDate) : undefined;
     if (paymentProofUrl !== undefined) sale.paymentProofUrl = paymentProofUrl;
+    if (Array.isArray(paymentParts)) {
+      sale.paymentParts = paymentParts.map(p => ({ amount: Number(p.amount) || 0, date: p.date ? new Date(p.date) : new Date() }));
+    }
 
     // If items/totals provided, update them (frontend sends computed values)
     if (Array.isArray(items)) {

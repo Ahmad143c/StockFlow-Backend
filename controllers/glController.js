@@ -11,6 +11,32 @@ exports.getTrialBalance = async (req, res) => {
     }
 };
 
+exports.getJournal = async (req, res) => {
+    try {
+        const { limit = 100 } = req.query;
+        // Fetch all GeneralLedger entries sorted by date
+        const entries = await GeneralLedger.find()
+            .populate('accountId', 'name code')
+            .sort({ transactionDate: -1, createdAt: -1 })
+            .limit(Number(limit));
+        
+        // Map to a cleaner format if needed
+        const mappedEntries = entries.map(e => ({
+            _id: e._id,
+            date: e.transactionDate,
+            reference: e.referenceId, // Or e.description
+            description: e.description,
+            accountName: e.accountId?.name || 'Unknown',
+            type: e.debit > 0 ? 'Debit' : 'Credit',
+            amount: e.debit > 0 ? e.debit : e.credit
+        }));
+
+        res.json(mappedEntries);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 exports.getLedgerByAccount = async (req, res) => {
     try {
         const { accountId } = req.params;

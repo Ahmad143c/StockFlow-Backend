@@ -125,6 +125,11 @@ exports.getCustomerLedger = async (req, res) => {
     const { customerId } = req.params;
     const { startDate, endDate } = req.query;
 
+    // Handle non-ObjectId strings (e.g. customers derived from names)
+    if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      return res.json([]); // Return empty ledger for non-registered customers
+    }
+
     let query = { customerId };
     if (startDate || endDate) {
       query.transactionDate = {};

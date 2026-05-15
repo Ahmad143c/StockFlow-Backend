@@ -1,6 +1,9 @@
 const Sale = require('../models/Sale');
 const Product = require('../models/Product');
 const User = require('../models/User');
+const Customer = require('../models/Customer');
+const customerController = require('./customerController');
+const AccountingService = require('../services/accountingService');
 const { google } = require('googleapis');
 
 // Helper: send email invoice via Gmail API (HTTPS-based, works on Railway, no domain needed)
@@ -340,7 +343,7 @@ function generateRefundInvoiceHTML(sale, refundRecord) {
 // Create a new sale (POST /sales)
 exports.createSale = async (req, res) => {
   try {
-    const { items, sellerId, sellerName, cashierName, customerName, customerContact, customerEmail, paidAmount, paymentMethod, paymentStatus: paymentStatusInput, paymentProofUrl, cashAmount, changeAmount, dueDate, discountAmount, emailFallbackToAdmin, adminEmail, paymentParts } = req.body;
+    const { items, sellerId, sellerName, cashierName, customerName, customerContact, customerEmail, customerId, paidAmount, paymentMethod, paymentStatus: paymentStatusInput, paymentProofUrl, cashAmount, changeAmount, dueDate, discountAmount, emailFallbackToAdmin, adminEmail, paymentParts } = req.body;
     if (!items?.length || !sellerId) return res.status(400).json({ message: 'Missing sale items or seller' });
 
     let totalQuantity = 0;
@@ -451,10 +454,57 @@ exports.createSale = async (req, res) => {
       customerName,
       customerContact,
       customerEmail,
+      customerId: customerId || undefined,
+      dueAmount: Math.max(0, netAmount - (Number(paidAmount) || 0)),
       emailStatus: 'pending',
       paymentParts: Array.isArray(paymentParts) ? paymentParts.map(p => ({ amount: Number(p.amount) || 0, date: p.date ? new Date(p.date) : new Date() })) : []
     });
     await sale.save();
+
+    // CUSTOMER LEDGER INTEGRATION
+    if (customerId) {
+      // 1. Record Sale (Debit)
+      await customerController.updateCustomerLedger(
+        customerId,
+        netAmount,
+        'Sale',
+        sale._id,
+        'Sale',
+        `Sale Invoice #${String(sale._id).slice(-6)}`
+      );
+
+      // 2. Record Payment if any (Credit)
+      if (paidAmount > 0) {
+        await customerController.updateCustomerLedger(
+          customerId,
+          Number(paidAmount),
+          'Payment',
+          sale._id,
+          'Sale', // Referencing the sale as the source of payment
+          `Payment for Invoice #${String(sale._id).slice(-6)}`
+        );
+      }
+    }
+
+    // GENERAL LEDGER INTEGRATION
+    try {
+      // 1. Record Sale (AR vs Sales Revenue)
+      await AccountingService.recordSale(sale);
+
+      // 2. Record Payment if any (Cash/Bank vs AR)
+      if (sale.paidAmount > 0) {
+        const tempPayment = {
+          _id: sale._id,
+          amount: sale.paidAmount,
+          paymentMethod: sale.paymentMethod,
+          note: `Initial payment for Sale #${String(sale._id).slice(-6)}`,
+          receivedBy: sale.sellerId
+        };
+        await AccountingService.recordCustomerPayment(tempPayment);
+      }
+    } catch (glError) {
+      console.error('GL Integration Error:', glError.message);
+    }
 
     // Send invoice email (await so status is saved) - enhanced HTML body
     if (emailFallbackToAdmin && adminEmail) {
@@ -900,6 +950,18 @@ exports.refundSale = async (req, res) => {
     sale.netAmount = Math.max(0, Number(sale.netAmount || 0) - totalRefundAmount);
 
     await sale.save();
+
+    // CUSTOMER LEDGER INTEGRATION (Refund)
+    if (sale.customerId && totalRefundAmount > 0) {
+      await customerController.updateCustomerLedger(
+        sale.customerId,
+        totalRefundAmount,
+        'Refund',
+        sale._id,
+        'Sale',
+        `Refund for Invoice #${String(sale._id).slice(-6)}`
+      );
+    }
 
     const updated = await Sale.findById(saleId).lean();
     // Send refund notification email to admin with refund invoice matching regular invoice design

@@ -1,5 +1,6 @@
 const PurchaseOrder = require('../models/PurchaseOrder');
 const Product = require('../models/Product');
+const AccountingService = require('../services/accountingService');
 
 // Get a single purchase order
 exports.getOne = async (req, res) => {
@@ -362,6 +363,30 @@ exports.create = async (req, res) => {
     }
     const order = new PurchaseOrder(req.body);
     await order.save();
+
+    // GENERAL LEDGER INTEGRATION
+    try {
+      // 1. Record Purchase (Inventory vs AP)
+      await AccountingService.recordPurchase(order, req.user?._id || order.createdBy);
+
+      // 2. Record Payment if any (AP vs Cash/Bank)
+      const advancePaid = Number(req.body.advanceAmount) || 0;
+      const initialPayment = Number(req.body.initialPayment) || 0;
+      const cashPaid = Number(req.body.cashPaid) || 0;
+      const totalPaid = advancePaid + initialPayment + cashPaid;
+
+      if (totalPaid > 0) {
+        const paymentMethod = req.body.paymentMethod || 'Cash Payment';
+        await AccountingService.recordSupplierPayment(
+          order,
+          totalPaid,
+          paymentMethod.includes('Cash') ? 'Cash' : 'Bank',
+          req.user?._id || order.createdBy
+        );
+      }
+    } catch (glError) {
+      console.error('GL Integration Error (Purchase):', glError.message);
+    }
 
     // If created as Received, immediately sync inventory
     try {

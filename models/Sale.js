@@ -30,6 +30,8 @@ const saleSchema = new mongoose.Schema({
   customerName: { type: String },
   customerContact: { type: String },
   customerEmail: { type: String }, // new
+  customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer' },
+  dueAmount: { type: Number, default: 0 },
 
   dueDate: { type: Date },
 

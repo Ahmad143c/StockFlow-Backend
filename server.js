@@ -47,7 +47,17 @@ mongoose.connect(process.env.MONGO_URI, {
   serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
   socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
 })
-  .then(() => console.log('MongoDB connected successfully'))
+  .then(async () => {
+    console.log('MongoDB connected successfully');
+    // Seed default accounts for GL
+    try {
+      const AccountingService = require('./services/accountingService');
+      await AccountingService.seedDefaultAccounts();
+      console.log('Default accounts seeded/verified');
+    } catch (seedErr) {
+      console.error('Error seeding accounts:', seedErr.message);
+    }
+  })
   .catch(err => {
     console.error('MongoDB connection error:', err.message);
     process.exit(1);
@@ -81,6 +91,8 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/purchase-orders', require('./routes/purchaseOrders'));
 app.use('/api/vendors', require('./routes/vendors'));
 app.use('/api/sales', require('./routes/sales'));
+app.use('/api/customers', require('./routes/customerRoutes'));
+app.use('/api/accounting', require('./routes/glRoutes'));
 
 // 404 handler - must be after all other routes
 app.use((req, res) => {

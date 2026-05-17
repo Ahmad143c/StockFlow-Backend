@@ -366,8 +366,17 @@ exports.create = async (req, res) => {
 
     // GENERAL LEDGER INTEGRATION
     try {
+      let glUserId = req.user?._id || req.user?.id;
+      if (!glUserId && typeof order.createdBy === 'string' && /^[0-9a-fA-F]{24}$/.test(order.createdBy)) {
+        glUserId = order.createdBy;
+      } else if (typeof glUserId === 'string' && !/^[0-9a-fA-F]{24}$/.test(glUserId)) {
+        glUserId = undefined;
+      } else if (!glUserId) {
+        glUserId = undefined;
+      }
+
       // 1. Record Purchase (Inventory vs AP)
-      await AccountingService.recordPurchase(order, req.user?._id || order.createdBy);
+      await AccountingService.recordPurchase(order, glUserId);
 
       // 2. Record Payment if any (AP vs Cash/Bank)
       const advancePaid = Number(req.body.advanceAmount) || 0;
@@ -381,7 +390,7 @@ exports.create = async (req, res) => {
           order,
           totalPaid,
           paymentMethod.includes('Cash') ? 'Cash' : 'Bank',
-          req.user?._id || order.createdBy
+          glUserId
         );
       }
     } catch (glError) {

@@ -387,18 +387,42 @@ exports.createSale = async (req, res) => {
     const providedStatus = normalizeStatus(paymentStatusInput);
     const paymentStatus = providedStatus || computedStatus;
 
-    // Decrement product stock based on sold items
+    // 1. Fetch all products in a single database query to optimize performance
+    const productIds = saleItems.map(item => item.productId).filter(Boolean);
+    const skus = saleItems.map(item => item.SKU).filter(Boolean);
+
+    const dbProducts = await Product.find({
+      $or: [
+        { _id: { $in: productIds } },
+        { SKU: { $in: skus } }
+      ]
+    });
+
+    const productMap = new Map();
+    dbProducts.forEach(p => {
+      productMap.set(p._id.toString(), p);
+      if (p.SKU) {
+        productMap.set(p.SKU.toString().trim().toLowerCase(), p);
+      }
+    });
+
+    // 2. Process stock adjustments in memory
     for (const item of saleItems) {
-      const product = item.productId
-        ? await Product.findById(item.productId)
-        : (item.SKU ? await Product.findOne({ SKU: item.SKU }) : null);
+      let product = null;
+      if (item.productId) {
+        product = productMap.get(item.productId.toString());
+      }
+      if (!product && item.SKU) {
+        product = productMap.get(item.SKU.toString().trim().toLowerCase());
+      }
+
       if (!product) {
         return res.status(400).json({ message: `Product not found for item ${item.productName || item.SKU || ''}` });
       }
 
       const piecesPerCarton = Number(product.piecesPerCarton) || 0;
-      const currentTotalPieces = Number(product.totalPieces) || ((Number(product.cartonQuantity) || 0) * (piecesPerCarton)) + (Number(product.losePieces) || 0);
-      const sellPieces = Number(item.quantity) || 0; // quantity is assumed in pieces
+      const currentTotalPieces = Number(product.totalPieces) || ((Number(product.cartonQuantity) || 0) * piecesPerCarton) + (Number(product.losePieces) || 0);
+      const sellPieces = Number(item.quantity) || 0;
 
       if (sellPieces > currentTotalPieces) {
         return res.status(400).json({ message: `Insufficient stock for ${product.name}. In stock: ${currentTotalPieces}, requested: ${sellPieces}` });
@@ -412,7 +436,6 @@ exports.createSale = async (req, res) => {
         newCartons = Math.floor(remainingPieces / piecesPerCarton);
         newLosePieces = remainingPieces % piecesPerCarton;
       } else {
-        // No defined piecesPerCarton, treat all as loose pieces
         newCartons = Number(product.cartonQuantity) || 0;
         newLosePieces = remainingPieces;
       }
@@ -430,9 +453,10 @@ exports.createSale = async (req, res) => {
       product.totalUnitCost = costPerPiece * remainingPieces;
       product.perPieceProfit = sellingPerPiece - costPerPiece;
       product.totalUnitProfit = product.perPieceProfit * remainingPieces;
-
-      await product.save();
     }
+
+    // 3. Save all modified products in parallel
+    await Promise.all(dbProducts.map(product => product.save()));
 
     const sale = new Sale({
       sellerId,
@@ -461,80 +485,89 @@ exports.createSale = async (req, res) => {
     });
     await sale.save();
 
-    // CUSTOMER LEDGER INTEGRATION
+    // 4. CUSTOMER & GENERAL LEDGER INTEGRATION (Executed in parallel)
+    const integrationPromises = [];
+
     if (customerId) {
       // 1. Record Sale (Debit)
-      await customerController.updateCustomerLedger(
-        customerId,
-        netAmount,
-        'Sale',
-        sale._id,
-        'Sale',
-        `Sale Invoice #${String(sale._id).slice(-6)}`
+      integrationPromises.push(
+        customerController.updateCustomerLedger(
+          customerId,
+          netAmount,
+          'Sale',
+          sale._id,
+          'Sale',
+          `Sale Invoice #${String(sale._id).slice(-6)}`
+        )
       );
 
       // 2. Record Payment if any (Credit)
       if (paidAmount > 0) {
-        await customerController.updateCustomerLedger(
-          customerId,
-          Number(paidAmount),
-          'Payment',
-          sale._id,
-          'Sale', // Referencing the sale as the source of payment
-          `Payment for Invoice #${String(sale._id).slice(-6)}`
+        integrationPromises.push(
+          customerController.updateCustomerLedger(
+            customerId,
+            Number(paidAmount),
+            'Payment',
+            sale._id,
+            'Sale',
+            `Payment for Invoice #${String(sale._id).slice(-6)}`
+          )
         );
       }
     }
 
-    // GENERAL LEDGER INTEGRATION
-    try {
-      // 1. Record Sale (AR vs Sales Revenue)
-      await AccountingService.recordSale(sale);
-
-      // 2. Record Payment if any (Cash/Bank vs AR)
-      if (sale.paidAmount > 0) {
-        const tempPayment = {
-          _id: sale._id,
-          amount: sale.paidAmount,
-          paymentMethod: sale.paymentMethod,
-          note: `Initial payment for Sale #${String(sale._id).slice(-6)}`,
-          receivedBy: sale.sellerId
-        };
-        await AccountingService.recordCustomerPayment(tempPayment);
-      }
-    } catch (glError) {
-      console.error('GL Integration Error:', glError.message);
-    }
-
-    // Send invoice email (await so status is saved) - enhanced HTML body
-    if (emailFallbackToAdmin && adminEmail) {
-      // No customer email - send only to admin
-      const invoiceNum = sale.invoiceNumber || String(sale._id).slice(-6);
-      const subject = `Invoice #${invoiceNum} - Admin Copy (No Customer Email)`;
-      
-      // Fetch products for warranty info
-      let products = [];
+    // General Ledger Integration
+    const glPromise = (async () => {
       try {
-        const productIds = sale.items.map(i => i.productId).filter(id => id);
-        if (productIds.length > 0) {
-          products = await Product.find({ _id: { $in: productIds } }).lean();
+        const glPromises = [];
+        // 1. Record Sale (AR vs Sales Revenue)
+        glPromises.push(AccountingService.recordSale(sale));
+
+        // 2. Record Payment if any (Cash/Bank vs AR)
+        if (sale.paidAmount > 0) {
+          const tempPayment = {
+            _id: sale._id,
+            amount: sale.paidAmount,
+            paymentMethod: sale.paymentMethod,
+            note: `Initial payment for Sale #${String(sale._id).slice(-6)}`,
+            receivedBy: sale.sellerId
+          };
+          glPromises.push(AccountingService.recordCustomerPayment(tempPayment));
         }
-      } catch (err) {
-        console.error('Error fetching products for warranty:', err);
+        await Promise.all(glPromises);
+      } catch (glError) {
+        console.error('GL Integration Error:', glError.message);
       }
-      
-      // Generate invoice HTML
-      let html;
-      try {
-        html = generateInvoiceHTML(sale, products);
-      } catch (err) {
-        console.error('Error generating invoice HTML:', err);
-        html = `<html><body><h1>Invoice</h1><p>Error generating invoice. Please contact support.</p></body></html>`;
-      }
+    })();
+    integrationPromises.push(glPromise);
 
-      // Send only to admin (no customer copy)
+    await Promise.all(integrationPromises);
+
+    // 5. Invoice email preparation & sending (Executed asynchronously in the background)
+    if (emailFallbackToAdmin && adminEmail) {
       (async () => {
         try {
+          const invoiceNum = sale.invoiceNumber || String(sale._id).slice(-6);
+          const subject = `Invoice #${invoiceNum} - Admin Copy (No Customer Email)`;
+          
+          let products = [];
+          try {
+            const productIds = sale.items.map(i => i.productId).filter(id => id);
+            if (productIds.length > 0) {
+              products = await Product.find({ _id: { $in: productIds } }).lean();
+            }
+          } catch (err) {
+            console.error('Error fetching products for warranty:', err);
+          }
+
+          let html;
+          try {
+            html = generateInvoiceHTML(sale, products);
+          } catch (err) {
+            console.error('Error generating invoice HTML:', err);
+            html = `<html><body><h1>Invoice</h1><p>Error generating invoice. Please contact support.</p></body></html>`;
+          }
+
           const mailRes = await sendInvoiceEmail(adminEmail, subject, html);
           if (mailRes.success) {
             const messageId = mailRes.result?.messageId || '';
@@ -548,33 +581,27 @@ exports.createSale = async (req, res) => {
         }
       })();
     } else if (sale.customerEmail) {
-      const subject = `Invoice #${sale.invoiceNumber || String(sale._id).slice(-8)} - New Adil Electric Concern`;
-      
-      // Fetch products for warranty info
-      let products = [];
-      try {
-        const productIds = sale.items.map(i => i.productId).filter(id => id);
-        if (productIds.length > 0) {
-          products = await Product.find({ _id: { $in: productIds } }).lean();
-        }
-      } catch (err) {
-        console.error('Error fetching products for warranty:', err);
-        // Continue without products - warranties will show as 'No warranty'
-      }
-      
-      // Generate invoice HTML
-      let html;
-      try {
-        html = generateInvoiceHTML(sale, products);
-      } catch (err) {
-        console.error('Error generating invoice HTML:', err);
-        // Continue with basic HTML or skip email
-        html = `<html><body><h1>Invoice</h1><p>Error generating invoice. Please contact support.</p></body></html>`;
-      }
-
-      // Send to customer + admin copy
       (async () => {
         try {
+          let products = [];
+          try {
+            const productIds = sale.items.map(i => i.productId).filter(id => id);
+            if (productIds.length > 0) {
+              products = await Product.find({ _id: { $in: productIds } }).lean();
+            }
+          } catch (err) {
+            console.error('Error fetching products for warranty:', err);
+          }
+
+          let html;
+          try {
+            html = generateInvoiceHTML(sale, products);
+          } catch (err) {
+            console.error('Error generating invoice HTML:', err);
+            html = `<html><body><h1>Invoice</h1><p>Error generating invoice. Please contact support.</p></body></html>`;
+          }
+
+          const subject = `Invoice #${sale.invoiceNumber || String(sale._id).slice(-8)} - New Adil Electric Concern`;
           const mailRes = await sendInvoiceEmail(sale.customerEmail, subject, html);
           if (mailRes.success) {
             const messageId = mailRes.result?.messageId || '';
@@ -584,7 +611,6 @@ exports.createSale = async (req, res) => {
             await Sale.findByIdAndUpdate(sale._id, { emailStatus: 'failed', emailError: errStr }).catch(()=>{});
           }
           
-          // Send to admin email
           const adminEmailAddr = adminEmail || 'adilelectric17@gmail.com';
           const paidVal = sale.paymentMethod === 'Cash' ? (sale.cashAmount || 0) : (sale.paidAmount || 0);
           const invoiceNum = sale.invoiceNumber || String(sale._id).slice(-6);
@@ -595,7 +621,6 @@ exports.createSale = async (req, res) => {
         }
       })();
     } else {
-      // no email provided and no fallback - set status immediately without awaiting
       Sale.findByIdAndUpdate(sale._id, { emailStatus: 'failed', emailError: 'No customer email provided' }).catch(()=>{});
     }
 

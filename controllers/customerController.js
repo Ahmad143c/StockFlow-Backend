@@ -1,6 +1,7 @@
 const Customer = require('../models/Customer');
 const CustomerPayment = require('../models/CustomerPayment');
 const CustomerLedger = require('../models/CustomerLedger');
+const Sale = require('../models/Sale');
 const AccountingService = require('../services/accountingService');
 const mongoose = require('mongoose');
 
@@ -84,7 +85,8 @@ exports.addPayment = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
-    const { customerId, amount, paymentMethod, note, referenceId } = req.body;
+    const customer = await Customer.findById(customerId).session(session);
+    if (!customer) throw new Error('Customer not found');
 
     const payment = new CustomerPayment({
       customerId,
@@ -96,6 +98,49 @@ exports.addPayment = async (req, res) => {
     });
 
     await payment.save({ session });
+
+    // Update individual sales invoices (FIFO)
+    let amountLeft = Number(amount);
+    const sales = await Sale.find({
+      $or: [
+        { customerId: customer._id },
+        { 
+          customerName: customer.name,
+          customerContact: customer.contact
+        }
+      ],
+      paymentStatus: { $in: ['Unpaid', 'Partial', 'Partial Paid', 'Credit'] }
+    }).sort({ createdAt: 1 }).session(session);
+
+    for (const sale of sales) {
+      if (amountLeft <= 0) break;
+      
+      const net = Number(sale.netAmount || sale.totalAmount || 0);
+      const paid = Number(sale.paidAmount || sale.cashAmount || 0);
+      const due = Math.max(0, net - paid);
+      
+      if (due <= 0) continue;
+      
+      const toPay = Math.min(amountLeft, due);
+      
+      sale.paidAmount = paid + toPay;
+      sale.dueAmount = Math.max(0, due - toPay);
+      
+      if (sale.dueAmount === 0) {
+        sale.paymentStatus = 'Paid';
+      } else {
+        sale.paymentStatus = 'Partial Paid';
+      }
+      
+      if (!sale.paymentParts) sale.paymentParts = [];
+      sale.paymentParts.push({
+        amount: toPay,
+        date: new Date()
+      });
+      
+      amountLeft -= toPay;
+      await sale.save({ session });
+    }
 
     // GENERAL LEDGER INTEGRATION
     await AccountingService.recordCustomerPayment(payment, session);

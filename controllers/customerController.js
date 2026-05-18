@@ -150,6 +150,22 @@ exports.addPayment = async (req, res) => {
       // Auto-repair reference link in database if it was blank/missing
       if (!sale.customerId) {
         sale.customerId = customer._id;
+        
+        // Debit the customer balance and purchases in database for this newly-linked historical sale
+        customer.currentBalance += net;
+        customer.totalPurchases += net;
+        await customer.save({ session });
+        
+        // Record the historical sale debit in the Customer Ledger statement
+        await updateCustomerLedger(
+          customer._id,
+          net,
+          'Sale',
+          sale._id,
+          'Sale',
+          `Linked Sale Invoice #${String(sale._id).slice(-6)}`,
+          session
+        );
       }
       
       amountLeft -= toPay;

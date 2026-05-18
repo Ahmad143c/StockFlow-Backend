@@ -117,20 +117,32 @@ function generateInvoiceHTML(sale, products = []) {
   };
 
   // Generate payment info HTML
-  const paidVal = sale.paymentMethod === 'Cash'
-    ? (sale.cashAmount || sale.paidAmount || 0)
-    : (sale.paidAmount || 0);
-  const changeVal = sale.changeAmount || 0;
   const discountVal = sale.discountAmount || 0;
   const grossTotal = netAmount + discountVal;
   const totalRefundAmount = (sale.refunds || []).reduce((s, r) => s + (Number(r.totalRefundAmount) || 0), 0);
+  const paidVal = sale.paymentStatus === 'Paid'
+    ? (sale.paymentMethod === 'Cash'
+      ? (sale.cashAmount || sale.paidAmount || 0)
+      : (sale.paidAmount || 0))
+    : (sale.paidAmount || 0);
+  const changeVal = sale.changeAmount || 0;
+
   let extra = '';
-  if (sale.paymentStatus === 'Partial Paid') {
-    const remaining = Math.max(0, netAmount - (sale.paidAmount || 0));
-    extra = `<div><span>Remaining</span> <span>Rs. ${remaining.toLocaleString()}</span></div>`;
-  } else if (sale.paymentStatus === 'Credit') {
-    extra = `<div><span>Due Date</span> <span>${sale.dueDate ? new Date(sale.dueDate).toISOString().split('T')[0] : '-'}</span></div>`;
+  const isFullyPaid = sale.paymentStatus === 'Paid';
+  if (!isFullyPaid) {
+    const remaining = Math.max(0, netAmount - (sale.paidAmount || 0) - totalRefundAmount);
+    const parts = Array.isArray(sale.paymentParts) && sale.paymentParts.length > 0
+      ? sale.paymentParts
+      : (sale.paidAmount > 0 ? [{ amount: sale.paidAmount, date: new Date(sale.createdAt || sale.date).toISOString().split('T')[0] }] : []);
+    const partsHtml = parts.map((p, i2) =>
+      `<div><span>Payment ${i2 + 1} (${p.date ? new Date(p.date).toLocaleDateString() : '-'})</span> <span>Rs. ${Number(p.amount || 0).toLocaleString()}</span></div>`
+    ).join('');
+    extra = `${partsHtml}<div><span>Remaining</span> <span>Rs. ${remaining.toLocaleString()}</span></div>`;
+    if (sale.paymentStatus === 'Credit') {
+      extra += `<div><span>Due Date</span> <span>${sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : '-'}</span></div>`;
+    }
   }
+
   const paymentInfoHtml = `
     ${discountVal > 0 ? `<div><span>Discount Amount</span> <span>Rs. ${Number(discountVal).toLocaleString()}</span></div>` : ''}
     <div><span>Total Amount</span> <span>Rs. ${Number(grossTotal).toLocaleString()}</span></div>

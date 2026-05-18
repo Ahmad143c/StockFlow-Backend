@@ -17,10 +17,9 @@ async function sendInvoiceEmail(to, subject, htmlBody) {
 
   try {
     const transporter = nodemailer.createTransport({
-      service: 'gmail',
       host: 'smtp.gmail.com',
-      port: 465,
-      secure: true,
+      port: 587,
+      secure: false, // Use STARTTLS on port 587
       auth: {
         user: emailUser,
         pass: emailPass

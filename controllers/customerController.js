@@ -100,16 +100,24 @@ exports.addPayment = async (req, res) => {
 
     await payment.save({ session });
 
-    // Update individual sales invoices (FIFO)
+     // Update individual sales invoices (FIFO)
     let amountLeft = Number(amount);
+    
+    // Dynamically build a case-insensitive and robust search query
+    const matchCriteria = [{ customerId: customer._id }];
+    
+    if (customer.name) {
+      matchCriteria.push({
+        customerName: { $regex: new RegExp('^' + customer.name.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') + '$', 'i') }
+      });
+    }
+    
+    if (customer.contact) {
+      matchCriteria.push({ customerContact: customer.contact });
+    }
+
     const sales = await Sale.find({
-      $or: [
-        { customerId: customer._id },
-        { 
-          customerName: customer.name,
-          customerContact: customer.contact
-        }
-      ],
+      $or: matchCriteria,
       paymentStatus: { $in: ['Unpaid', 'Partial', 'Partial Paid', 'Credit'] }
     }).sort({ createdAt: 1 }).session(session);
 
@@ -138,6 +146,11 @@ exports.addPayment = async (req, res) => {
         amount: toPay,
         date: new Date()
       });
+      
+      // Auto-repair reference link in database if it was blank/missing
+      if (!sale.customerId) {
+        sale.customerId = customer._id;
+      }
       
       amountLeft -= toPay;
       await sale.save({ session });

@@ -1,7 +1,6 @@
 const Customer = require('../models/Customer');
 const CustomerPayment = require('../models/CustomerPayment');
 const CustomerLedger = require('../models/CustomerLedger');
-const Sale = require('../models/Sale');
 const AccountingService = require('../services/accountingService');
 const mongoose = require('mongoose');
 
@@ -86,8 +85,6 @@ exports.addPayment = async (req, res) => {
   session.startTransaction();
   try {
     const { customerId, amount, paymentMethod, note, referenceId } = req.body;
-    const customer = await Customer.findById(customerId).session(session);
-    if (!customer) throw new Error('Customer not found');
 
     const payment = new CustomerPayment({
       customerId,
@@ -99,78 +96,6 @@ exports.addPayment = async (req, res) => {
     });
 
     await payment.save({ session });
-
-     // Update individual sales invoices (FIFO)
-    let amountLeft = Number(amount);
-    
-    // Dynamically build a case-insensitive and robust search query
-    const matchCriteria = [{ customerId: customer._id }];
-    
-    if (customer.name) {
-      matchCriteria.push({
-        customerName: { $regex: new RegExp('^' + customer.name.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') + '$', 'i') }
-      });
-    }
-    
-    if (customer.contact) {
-      matchCriteria.push({ customerContact: customer.contact });
-    }
-
-    const sales = await Sale.find({
-      $or: matchCriteria,
-      paymentStatus: { $in: ['Unpaid', 'Partial', 'Partial Paid', 'Credit'] }
-    }).sort({ createdAt: 1 }).session(session);
-
-    for (const sale of sales) {
-      if (amountLeft <= 0) break;
-      
-      const net = Number(sale.netAmount || sale.totalAmount || 0);
-      const paid = Number(sale.paidAmount || sale.cashAmount || 0);
-      const due = Math.max(0, net - paid);
-      
-      if (due <= 0) continue;
-      
-      const toPay = Math.min(amountLeft, due);
-      
-      sale.paidAmount = paid + toPay;
-      sale.dueAmount = Math.max(0, due - toPay);
-      
-      if (sale.dueAmount === 0) {
-        sale.paymentStatus = 'Paid';
-      } else {
-        sale.paymentStatus = 'Partial Paid';
-      }
-      
-      if (!sale.paymentParts) sale.paymentParts = [];
-      sale.paymentParts.push({
-        amount: toPay,
-        date: new Date()
-      });
-      
-      // Auto-repair reference link in database if it was blank/missing
-      if (!sale.customerId) {
-        sale.customerId = customer._id;
-        
-        // Debit the customer balance and purchases in database for this newly-linked historical sale
-        customer.currentBalance += net;
-        customer.totalPurchases += net;
-        await customer.save({ session });
-        
-        // Record the historical sale debit in the Customer Ledger statement
-        await updateCustomerLedger(
-          customer._id,
-          net,
-          'Sale',
-          sale._id,
-          'Sale',
-          `Linked Sale Invoice #${String(sale._id).slice(-6)}`,
-          session
-        );
-      }
-      
-      amountLeft -= toPay;
-      await sale.save({ session });
-    }
 
     // GENERAL LEDGER INTEGRATION
     await AccountingService.recordCustomerPayment(payment, session);

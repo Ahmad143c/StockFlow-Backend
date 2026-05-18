@@ -117,32 +117,20 @@ function generateInvoiceHTML(sale, products = []) {
   };
 
   // Generate payment info HTML
+  const paidVal = sale.paymentMethod === 'Cash'
+    ? (sale.cashAmount || sale.paidAmount || 0)
+    : (sale.paidAmount || 0);
+  const changeVal = sale.changeAmount || 0;
   const discountVal = sale.discountAmount || 0;
   const grossTotal = netAmount + discountVal;
   const totalRefundAmount = (sale.refunds || []).reduce((s, r) => s + (Number(r.totalRefundAmount) || 0), 0);
-  const paidVal = sale.paymentStatus === 'Paid'
-    ? (sale.paymentMethod === 'Cash'
-      ? (sale.cashAmount || sale.paidAmount || 0)
-      : (sale.paidAmount || 0))
-    : (sale.paidAmount || 0);
-  const changeVal = sale.changeAmount || 0;
-
   let extra = '';
-  const isFullyPaid = sale.paymentStatus === 'Paid';
-  if (!isFullyPaid) {
-    const remaining = Math.max(0, netAmount - (sale.paidAmount || 0) - totalRefundAmount);
-    const parts = Array.isArray(sale.paymentParts) && sale.paymentParts.length > 0
-      ? sale.paymentParts
-      : (sale.paidAmount > 0 ? [{ amount: sale.paidAmount, date: new Date(sale.createdAt || sale.date).toISOString().split('T')[0] }] : []);
-    const partsHtml = parts.map((p, i2) =>
-      `<div><span>Payment ${i2 + 1} (${p.date ? new Date(p.date).toLocaleDateString() : '-'})</span> <span>Rs. ${Number(p.amount || 0).toLocaleString()}</span></div>`
-    ).join('');
-    extra = `${partsHtml}<div><span>Remaining</span> <span>Rs. ${remaining.toLocaleString()}</span></div>`;
-    if (sale.paymentStatus === 'Credit') {
-      extra += `<div><span>Due Date</span> <span>${sale.dueDate ? new Date(sale.dueDate).toLocaleDateString() : '-'}</span></div>`;
-    }
+  if (sale.paymentStatus === 'Partial Paid') {
+    const remaining = Math.max(0, netAmount - (sale.paidAmount || 0));
+    extra = `<div><span>Remaining</span> <span>Rs. ${remaining.toLocaleString()}</span></div>`;
+  } else if (sale.paymentStatus === 'Credit') {
+    extra = `<div><span>Due Date</span> <span>${sale.dueDate ? new Date(sale.dueDate).toISOString().split('T')[0] : '-'}</span></div>`;
   }
-
   const paymentInfoHtml = `
     ${discountVal > 0 ? `<div><span>Discount Amount</span> <span>Rs. ${Number(discountVal).toLocaleString()}</span></div>` : ''}
     <div><span>Total Amount</span> <span>Rs. ${Number(grossTotal).toLocaleString()}</span></div>
@@ -518,33 +506,35 @@ exports.createSale = async (req, res) => {
       console.error('GL Integration Error:', glError.message);
     }
 
-    // Send invoice email in background
+    // Send invoice email (await so status is saved) - enhanced HTML body
     if (emailFallbackToAdmin && adminEmail) {
+      // No customer email - send only to admin
       const invoiceNum = sale.invoiceNumber || String(sale._id).slice(-6);
       const subject = `Invoice #${invoiceNum} - Admin Copy (No Customer Email)`;
       
+      // Fetch products for warranty info
+      let products = [];
+      try {
+        const productIds = sale.items.map(i => i.productId).filter(id => id);
+        if (productIds.length > 0) {
+          products = await Product.find({ _id: { $in: productIds } }).lean();
+        }
+      } catch (err) {
+        console.error('Error fetching products for warranty:', err);
+      }
+      
+      // Generate invoice HTML
+      let html;
+      try {
+        html = generateInvoiceHTML(sale, products);
+      } catch (err) {
+        console.error('Error generating invoice HTML:', err);
+        html = `<html><body><h1>Invoice</h1><p>Error generating invoice. Please contact support.</p></body></html>`;
+      }
+
+      // Send only to admin (no customer copy)
       (async () => {
         try {
-          // Fetch products for warranty info in background
-          let products = [];
-          try {
-            const productIds = sale.items.map(i => i.productId).filter(id => id);
-            if (productIds.length > 0) {
-              products = await Product.find({ _id: { $in: productIds } }).lean();
-            }
-          } catch (err) {
-            console.error('Error fetching products for warranty in background:', err);
-          }
-          
-          // Generate invoice HTML in background
-          let html;
-          try {
-            html = generateInvoiceHTML(sale, products);
-          } catch (err) {
-            console.error('Error generating invoice HTML in background:', err);
-            html = `<html><body><h1>Invoice</h1><p>Error generating invoice. Please contact support.</p></body></html>`;
-          }
-
           const mailRes = await sendInvoiceEmail(adminEmail, subject, html);
           if (mailRes.success) {
             const messageId = mailRes.result?.messageId || '';
@@ -554,34 +544,37 @@ exports.createSale = async (req, res) => {
             await Sale.findByIdAndUpdate(sale._id, { emailStatus: 'failed', emailError: errStr }).catch(()=>{});
           }
         } catch (e) {
-          console.error('Background admin email send failed:', e.message);
+          console.error('Background email send failed:', e.message);
         }
       })();
     } else if (sale.customerEmail) {
       const subject = `Invoice #${sale.invoiceNumber || String(sale._id).slice(-8)} - New Adil Electric Concern`;
       
+      // Fetch products for warranty info
+      let products = [];
+      try {
+        const productIds = sale.items.map(i => i.productId).filter(id => id);
+        if (productIds.length > 0) {
+          products = await Product.find({ _id: { $in: productIds } }).lean();
+        }
+      } catch (err) {
+        console.error('Error fetching products for warranty:', err);
+        // Continue without products - warranties will show as 'No warranty'
+      }
+      
+      // Generate invoice HTML
+      let html;
+      try {
+        html = generateInvoiceHTML(sale, products);
+      } catch (err) {
+        console.error('Error generating invoice HTML:', err);
+        // Continue with basic HTML or skip email
+        html = `<html><body><h1>Invoice</h1><p>Error generating invoice. Please contact support.</p></body></html>`;
+      }
+
+      // Send to customer + admin copy
       (async () => {
         try {
-          // Fetch products for warranty info in background
-          let products = [];
-          try {
-            const productIds = sale.items.map(i => i.productId).filter(id => id);
-            if (productIds.length > 0) {
-              products = await Product.find({ _id: { $in: productIds } }).lean();
-            }
-          } catch (err) {
-            console.error('Error fetching products for warranty in background:', err);
-          }
-          
-          // Generate invoice HTML in background
-          let html;
-          try {
-            html = generateInvoiceHTML(sale, products);
-          } catch (err) {
-            console.error('Error generating invoice HTML in background:', err);
-            html = `<html><body><h1>Invoice</h1><p>Error generating invoice. Please contact support.</p></body></html>`;
-          }
-
           const mailRes = await sendInvoiceEmail(sale.customerEmail, subject, html);
           if (mailRes.success) {
             const messageId = mailRes.result?.messageId || '';
@@ -602,7 +595,7 @@ exports.createSale = async (req, res) => {
         }
       })();
     } else {
-      // no email provided and no fallback - set status immediately
+      // no email provided and no fallback - set status immediately without awaiting
       Sale.findByIdAndUpdate(sale._id, { emailStatus: 'failed', emailError: 'No customer email provided' }).catch(()=>{});
     }
 

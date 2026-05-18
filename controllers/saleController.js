@@ -18,10 +18,14 @@ async function sendInvoiceEmail(to, subject, htmlBody) {
   try {
     const transporter = nodemailer.createTransport({
       service: 'gmail',
+      host: 'smtp.gmail.com',
+      port: 465,
+      secure: true,
       auth: {
         user: emailUser,
         pass: emailPass
-      }
+      },
+      family: 4 // Force IPv4 to bypass Railway's broken IPv6 outbound route
     });
 
     const info = await transporter.sendMail({

@@ -85,6 +85,7 @@ exports.addPayment = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
+    const { customerId, amount, paymentMethod, note, referenceId } = req.body;
     const customer = await Customer.findById(customerId).session(session);
     if (!customer) throw new Error('Customer not found');
 

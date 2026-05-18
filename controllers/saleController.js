@@ -5,6 +5,7 @@ const Customer = require('../models/Customer');
 const customerController = require('./customerController');
 const AccountingService = require('../services/accountingService');
 const nodemailer = require('nodemailer');
+const dns = require('dns');
 
 // Helper: send email invoice via Nodemailer (uses App Password)
 async function sendInvoiceEmail(to, subject, htmlBody) {
@@ -24,7 +25,10 @@ async function sendInvoiceEmail(to, subject, htmlBody) {
         user: emailUser,
         pass: emailPass
       },
-      family: 4 // Force IPv4 to bypass Railway's broken IPv6 outbound route
+      // Bulletproof IPv4 force: Custom DNS lookup that only requests IPv4 (A) records
+      lookup: (hostname, options, callback) => {
+        dns.lookup(hostname, { family: 4 }, callback);
+      }
     });
 
     const info = await transporter.sendMail({

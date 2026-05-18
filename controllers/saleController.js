@@ -4,47 +4,34 @@ const User = require('../models/User');
 const Customer = require('../models/Customer');
 const customerController = require('./customerController');
 const AccountingService = require('../services/accountingService');
-const { google } = require('googleapis');
+const nodemailer = require('nodemailer');
 
-// Helper: send email invoice via Gmail API (HTTPS-based, works on Railway, no domain needed)
+// Helper: send email invoice via Nodemailer (uses App Password)
 async function sendInvoiceEmail(to, subject, htmlBody) {
-  const { GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN, GMAIL_USER } = process.env;
-  if (!GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET || !GMAIL_REFRESH_TOKEN) {
-    return { success: false, error: 'Gmail API credentials missing. Set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN in .env.' };
+  const emailUser = process.env.GMAIL_USER || process.env.EMAIL_FROM;
+  const emailPass = process.env.GMAIL_APP_PASSWORD;
+
+  if (!emailUser || !emailPass) {
+    return { success: false, error: 'Email credentials missing. Set GMAIL_USER and GMAIL_APP_PASSWORD in .env.' };
   }
 
-  const fromEmail = GMAIL_USER || process.env.EMAIL_FROM || 'me';
-
   try {
-    const oauth2Client = new google.auth.OAuth2(
-      GMAIL_CLIENT_ID,
-      GMAIL_CLIENT_SECRET,
-      'https://developers.google.com/oauthplayground'
-    );
-    oauth2Client.setCredentials({ refresh_token: GMAIL_REFRESH_TOKEN });
-
-    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-
-    // Build RFC 2822 email message
-    const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
-    const messageParts = [
-      `From: ${fromEmail}`,
-      `To: ${to}`,
-      `Subject: ${utf8Subject}`,
-      'Content-Type: text/html; charset=utf-8',
-      'MIME-Version: 1.0',
-      '',
-      htmlBody
-    ];
-    const message = messageParts.join('\n');
-    const encodedMessage = Buffer.from(message).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-
-    const result = await gmail.users.messages.send({
-      userId: 'me',
-      requestBody: { raw: encodedMessage }
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: emailUser,
+        pass: emailPass
+      }
     });
 
-    return { success: true, result: result.data };
+    const info = await transporter.sendMail({
+      from: emailUser,
+      to: to,
+      subject: subject,
+      html: htmlBody
+    });
+
+    return { success: true, result: info };
   } catch (err) {
     const msg = err?.message || String(err);
     console.error('Email send error:', msg);

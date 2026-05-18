@@ -1,6 +1,9 @@
 const Customer = require('../models/Customer');
 const CustomerPayment = require('../models/CustomerPayment');
 const CustomerLedger = require('../models/CustomerLedger');
+const Sale = require('../models/Sale');
+const JournalEntry = require('../models/JournalEntry');
+const GeneralLedger = require('../models/GeneralLedger');
 const AccountingService = require('../services/accountingService');
 const mongoose = require('mongoose');
 
@@ -148,6 +151,78 @@ exports.getOutstandingBalances = async (req, res) => {
   try {
     const customers = await Customer.find({ currentBalance: { $gt: 0 } }).sort({ currentBalance: -1 });
     res.json(customers);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.deleteCustomerByDetails = async (req, res) => {
+  try {
+    const { name, contact } = req.query;
+    if (!name) {
+      return res.status(400).json({ message: 'Customer name is required' });
+    }
+
+    // 1. Find Customer document if exists
+    let customer = null;
+    if (contact) {
+      customer = await Customer.findOne({ name, contact });
+    } else {
+      customer = await Customer.findOne({ name });
+    }
+
+    const customerQuery = [];
+    if (customer) {
+      customerQuery.push({ customerId: customer._id });
+    }
+    if (name) {
+      if (contact) {
+        customerQuery.push({ customerName: name, customerContact: contact });
+      } else {
+        customerQuery.push({ customerName: name });
+      }
+    }
+
+    // 2. Find all sales (invoices) related to this customer
+    const sales = await Sale.find({ $or: customerQuery });
+    const saleIds = sales.map(s => s._id);
+
+    // 3. Find all payments related to this customer
+    let paymentIds = [];
+    if (customer) {
+      const payments = await CustomerPayment.find({ customerId: customer._id });
+      paymentIds = payments.map(p => p._id);
+    }
+
+    // 4. Delete JournalEntries and GeneralLedger entries referencing these sales/payments
+    const refIds = [...saleIds];
+    if (paymentIds.length > 0) {
+      refIds.push(...paymentIds);
+    }
+
+    if (refIds.length > 0) {
+      const journalEntries = await JournalEntry.find({ referenceId: { $in: refIds } });
+      const journalEntryIds = journalEntries.map(j => j._id);
+      
+      if (journalEntryIds.length > 0) {
+        await GeneralLedger.deleteMany({ journalEntryId: { $in: journalEntryIds } });
+        await JournalEntry.deleteMany({ _id: { $in: journalEntryIds } });
+      }
+    }
+
+    // 5. Delete CustomerLedger and CustomerPayment
+    if (customer) {
+      await CustomerLedger.deleteMany({ customerId: customer._id });
+      await CustomerPayment.deleteMany({ customerId: customer._id });
+      await Customer.findByIdAndDelete(customer._id);
+    }
+
+    // 6. Delete the Sales (Invoices) themselves
+    if (saleIds.length > 0) {
+      await Sale.deleteMany({ _id: { $in: saleIds } });
+    }
+
+    res.json({ message: 'Customer and all related sales, payments, and ledger data deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

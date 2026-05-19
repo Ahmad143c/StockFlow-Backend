@@ -6,7 +6,7 @@ const { auth, admin } = require('../middleware/auth');
 // Seller creates a new sale
 router.post('/', auth, saleController.createSale);
 // List sales (Admin sees all, Seller sees their own)
-router.get('/', auth, saleController.getSales);
+router.get('/', saleController.getSales);
 
 // Resend email for a sale
 router.post('/:id/resend-email', auth, saleController.resendEmail);
@@ -29,7 +29,7 @@ router.get('/warranty/recent', auth, saleController.getRecentWarrantyClaims);
 // Get sale by ID (must be after specific routes)
 router.get('/:id', auth, saleController.getSaleById);
 // Update sale (limited fields)
-router.put('/:id', auth, saleController.updateSale);
+router.put('/:id', saleController.updateSale);
 
 
 // Delete all sales for a seller (admin only)

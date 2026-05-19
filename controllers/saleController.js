@@ -775,6 +775,7 @@ exports.updateSale = async (req, res) => {
     const updated = await Sale.findById(req.params.id).lean();
     res.json(updated);
   } catch (e) {
+    console.error('Update Sale Error Trace:', e);
     res.status(500).json({ message: 'Failed to update sale', error: e.message });
   }
 };

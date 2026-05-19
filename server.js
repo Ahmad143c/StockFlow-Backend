@@ -109,12 +109,11 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-const HOST = process.env.HOST || '0.0.0.0';
 
-console.log(`Starting server on ${HOST}:${PORT}...`);
-app.listen(PORT, HOST, () => {
-  console.log(`✅ Server running successfully on ${HOST}:${PORT}`);
-  console.log(`📡 Health check available at: http://${HOST}:${PORT}/health`);
+console.log(`Starting server on port ${PORT}...`);
+app.listen(PORT, () => {
+  console.log(`✅ Server running successfully on port ${PORT}`);
+  console.log(`📡 Health check available at: http://localhost:${PORT}/health`);
 });
 
 // Handle unhandled promise rejections

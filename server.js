@@ -120,7 +120,10 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-if (process.env.NODE_ENV !== 'production') {
+// Start a listener whenever this file is executed directly (local development
+// and Railway). Vercel imports the Express app as a serverless handler, so it
+// must not create its own listener there.
+if (require.main === module) {
   console.log(`Starting server on port ${PORT}...`);
   app.listen(PORT, () => {
     console.log(`✅ Server running successfully on port ${PORT}`);

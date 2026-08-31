@@ -47,31 +47,36 @@ app.use(helmet({
 const uploadsPath = process.env.UPLOADS_PATH || 'uploads';
 app.use('/uploads', express.static(path.join(__dirname, uploadsPath)));
 
-if (!process.env.MONGO_URI) {
-  console.error('Missing required environment variable: MONGO_URI');
-  process.exit(1);
-}
+let databaseReady;
 
-console.log('Attempting to connect to MongoDB...');
-mongoose.connect(process.env.MONGO_URI, {
-  serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
-  socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
-})
-  .then(async () => {
-    console.log('MongoDB connected successfully');
-    // Seed default accounts for GL
-    try {
-      const AccountingService = require('./services/accountingService');
-      await AccountingService.seedDefaultAccounts();
-      console.log('Default accounts seeded/verified');
-    } catch (seedErr) {
-      console.error('Error seeding accounts:', seedErr.message);
-    }
+if (!process.env.MONGO_URI) {
+  const message = 'Missing required environment variable: MONGO_URI';
+  console.error(message);
+  databaseReady = Promise.reject(new Error(message));
+  // Avoid an unhandled rejection before the request middleware consumes it.
+  databaseReady.catch(() => {});
+} else {
+  console.log('Attempting to connect to MongoDB...');
+  databaseReady = mongoose.connect(process.env.MONGO_URI, {
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
   })
-  .catch(err => {
-    console.error('MongoDB connection error:', err.message);
-    process.exit(1);
-  });
+    .then(async () => {
+      console.log('MongoDB connected successfully');
+      try {
+        const AccountingService = require('./services/accountingService');
+        await AccountingService.seedDefaultAccounts();
+        console.log('Default accounts seeded/verified');
+      } catch (seedErr) {
+        console.error('Error seeding accounts:', seedErr.message);
+      }
+    })
+    .catch(err => {
+      console.error('MongoDB connection error:', err.message);
+      throw err;
+    });
+  databaseReady.catch(() => {});
+}
 
 
 // basic root endpoint for health-checks / info
@@ -92,6 +97,21 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
   });
+});
+
+// Vercel invokes the exported app per request. Wait for the shared connection
+// attempt rather than terminating the serverless runtime when MongoDB is not
+// configured or cannot be reached.
+app.use('/api', async (req, res, next) => {
+  try {
+    await databaseReady;
+    next();
+  } catch (error) {
+    res.status(503).json({
+      message: 'Database connection is unavailable',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
 });
 
 app.use('/api/auth', require('./routes/auth'));

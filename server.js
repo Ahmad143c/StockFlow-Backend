@@ -19,6 +19,7 @@ const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:5173',
   'https://stockflow-sand.vercel.app',
+  'https://stock-flow-frontend-tau.vercel.app',
   process.env.CLIENT_URL
 ].filter(Boolean);
 
@@ -27,7 +28,7 @@ const corsOptions = {
     if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
       callback(null, true);
     } else {
-      callback(null, true); // Allow during transition/debugging or fallback
+      callback(new Error(`Origin not allowed by CORS: ${origin}`));
     }
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

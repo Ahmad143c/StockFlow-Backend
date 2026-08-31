@@ -4,47 +4,39 @@ const User = require('../models/User');
 const Customer = require('../models/Customer');
 const customerController = require('./customerController');
 const AccountingService = require('../services/accountingService');
-const { google } = require('googleapis');
+const nodemailer = require('nodemailer');
 
-// Helper: send email invoice via Gmail API (HTTPS-based, works on Railway, no domain needed)
+// Helper: send email invoice via Gmail SMTP with App Password
 async function sendInvoiceEmail(to, subject, htmlBody) {
-  const { GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN, GMAIL_USER } = process.env;
-  if (!GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET || !GMAIL_REFRESH_TOKEN) {
-    return { success: false, error: 'Gmail API credentials missing. Set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN in .env.' };
+  const { SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, EMAIL_FROM } = process.env;
+  
+  if (!SMTP_USER || !SMTP_PASS) {
+    return { success: false, error: 'SMTP credentials missing. Set SMTP_USER and SMTP_PASS in .env.' };
   }
 
-  const fromEmail = GMAIL_USER || process.env.EMAIL_FROM || 'me';
+  const fromEmail = EMAIL_FROM || SMTP_USER;
 
   try {
-    const oauth2Client = new google.auth.OAuth2(
-      GMAIL_CLIENT_ID,
-      GMAIL_CLIENT_SECRET,
-      'https://developers.google.com/oauthplayground'
-    );
-    oauth2Client.setCredentials({ refresh_token: GMAIL_REFRESH_TOKEN });
-
-    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-
-    // Build RFC 2822 email message
-    const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
-    const messageParts = [
-      `From: ${fromEmail}`,
-      `To: ${to}`,
-      `Subject: ${utf8Subject}`,
-      'Content-Type: text/html; charset=utf-8',
-      'MIME-Version: 1.0',
-      '',
-      htmlBody
-    ];
-    const message = messageParts.join('\n');
-    const encodedMessage = Buffer.from(message).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-
-    const result = await gmail.users.messages.send({
-      userId: 'me',
-      requestBody: { raw: encodedMessage }
+    const transporter = nodemailer.createTransport({
+      host: SMTP_HOST || 'smtp.gmail.com',
+      port: Number(SMTP_PORT) || 587,
+      secure: SMTP_SECURE === 'true',
+      auth: {
+        user: SMTP_USER,
+        pass: SMTP_PASS
+      },
+      connectionTimeout: 15000,
+      socketTimeout: 15000
     });
 
-    return { success: true, result: result.data };
+    const info = await transporter.sendMail({
+      from: fromEmail,
+      to: to,
+      subject: subject,
+      html: htmlBody
+    });
+
+    return { success: true, result: { messageId: info.messageId } };
   } catch (err) {
     const msg = err?.message || String(err);
     console.error('Email send error:', msg);
@@ -783,10 +775,17 @@ exports.updateSale = async (req, res) => {
 // Resend sale invoice email (POST /sales/:id/resend-email)
 exports.resendEmail = async (req, res) => {
   try {
+    console.log('[resendEmail] Starting email resend for sale:', req.params.id);
     const saleId = req.params.id;
     const { fallbackToAdmin, adminEmail, reason } = req.body;
+    console.log('[resendEmail] Request body:', { fallbackToAdmin, adminEmail, reason });
+    
     const sale = await Sale.findById(saleId);
-    if (!sale) return res.status(404).json({ message: 'Sale not found' });
+    if (!sale) {
+      console.error('[resendEmail] Sale not found:', saleId);
+      return res.status(404).json({ message: 'Sale not found' });
+    }
+    console.log('[resendEmail] Sale found:', sale._id, 'customerEmail:', sale.customerEmail);
 
     // Build professional invoice HTML (same as createSale)
     const invoiceNum = sale.invoiceNumber || String(sale._id).substr(-6);
@@ -806,9 +805,11 @@ exports.resendEmail = async (req, res) => {
     // Generate invoice HTML
     let html;
     try {
+      console.log('[resendEmail] Generating invoice HTML...');
       html = generateInvoiceHTML(sale, products);
+      console.log('[resendEmail] Invoice HTML generated successfully');
     } catch (err) {
-      console.error('Error generating invoice HTML:', err);
+      console.error('[resendEmail] Error generating invoice HTML:', err);
       return res.status(500).json({ success: false, error: 'Failed to generate invoice HTML' });
     }
 
@@ -816,6 +817,7 @@ exports.resendEmail = async (req, res) => {
     
     if (fallbackToAdmin || !sale.customerEmail) {
       // Send to admin email instead
+      console.log('[resendEmail] Using admin email fallback');
       targetEmail = adminEmail || 'adilelectric17@gmail.com';
       subject = `Invoice #${invoiceNum} - Admin Copy (No Customer Email)`;
       if (reason) {
@@ -824,7 +826,10 @@ exports.resendEmail = async (req, res) => {
       emailStatus = 'sent_to_admin';
       emailError = '';
       
+      console.log('[resendEmail] Sending email to admin:', targetEmail);
       const mailRes = await sendInvoiceEmail(targetEmail, subject, html);
+      console.log('[resendEmail] Email send result:', mailRes);
+      
       if (mailRes.success) {
         const messageId = mailRes.result?.messageId || '';
         await Sale.findByIdAndUpdate(saleId, { emailStatus, emailError, emailMessageId: messageId }).catch(()=>{});
@@ -832,6 +837,7 @@ exports.resendEmail = async (req, res) => {
         return res.json({ success: true, sale: updated, sentTo: 'admin', reason: reason || 'No customer email' });
       } else {
         const errStr = typeof mailRes.error === 'string' ? mailRes.error : JSON.stringify(mailRes.error);
+        console.error('[resendEmail] Email send failed:', errStr);
         emailStatus = 'failed';
         emailError = errStr;
         await Sale.findByIdAndUpdate(saleId, { emailStatus, emailError }).catch(()=>{});
@@ -840,12 +846,16 @@ exports.resendEmail = async (req, res) => {
       }
     } else {
       // Normal customer email
+      console.log('[resendEmail] Sending to customer email:', sale.customerEmail);
       targetEmail = sale.customerEmail;
       subject = `Invoice #${sale.invoiceNumber || String(sale._id).slice(-8)} - New Adil Electric Concern`;
       emailStatus = 'sent';
       emailError = '';
       
+      console.log('[resendEmail] Sending email to customer:', targetEmail);
       const mailRes = await sendInvoiceEmail(targetEmail, subject, html);
+      console.log('[resendEmail] Email send result:', mailRes);
+      
       if (mailRes.success) {
         const messageId = mailRes.result?.messageId || '';
         await Sale.findByIdAndUpdate(saleId, { emailStatus, emailError, emailMessageId: messageId }).catch(()=>{});
@@ -854,12 +864,16 @@ exports.resendEmail = async (req, res) => {
         const adminEmailAddr = adminEmail || 'adilelectric17@gmail.com';
         const paidVal = sale.paymentMethod === 'Cash' ? (sale.cashAmount || 0) : (sale.paidAmount || 0);
         const adminSubject = `[ADMIN] Invoice #${invoiceNum} - ${sale.customerName || 'Unknown Customer'} - Net Rs. ${sale.netAmount} - Paid Rs. ${paidVal} - Change Rs. ${sale.changeAmount || 0}`;
-        await sendInvoiceEmail(adminEmailAddr, adminSubject, html).catch(()=>{});
+        console.log('[resendEmail] Sending admin copy to:', adminEmailAddr);
+        await sendInvoiceEmail(adminEmailAddr, adminSubject, html).catch((err) => {
+          console.error('[resendEmail] Admin email copy failed:', err);
+        });
         
         const updated = await Sale.findById(saleId).lean();
         return res.json({ success: true, sale: updated, sentTo: 'customer' });
       } else {
         const errStr = typeof mailRes.error === 'string' ? mailRes.error : JSON.stringify(mailRes.error);
+        console.error('[resendEmail] Email send failed:', errStr);
         emailStatus = 'failed';
         emailError = errStr;
         await Sale.findByIdAndUpdate(saleId, { emailStatus, emailError }).catch(()=>{});
@@ -868,6 +882,7 @@ exports.resendEmail = async (req, res) => {
       }
     }
   } catch (e) {
+    console.error('[resendEmail] Unhandled error:', e);
     return res.status(500).json({ success: false, error: e.message });
   }
 };

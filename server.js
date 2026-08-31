@@ -110,11 +110,15 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-console.log(`Starting server on port ${PORT}...`);
-app.listen(PORT, () => {
-  console.log(`✅ Server running successfully on port ${PORT}`);
-  console.log(`📡 Health check available at: http://localhost:${PORT}/health`);
-});
+if (process.env.NODE_ENV !== 'production') {
+  console.log(`Starting server on port ${PORT}...`);
+  app.listen(PORT, () => {
+    console.log(`✅ Server running successfully on port ${PORT}`);
+    console.log(`📡 Health check available at: http://localhost:${PORT}/health`);
+  });
+}
+
+module.exports = app;
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
